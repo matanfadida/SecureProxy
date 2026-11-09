@@ -14,4 +14,8 @@
     <ProjectReference Include="..\SecureProxy.Application\SecureProxy.Application.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="Persistence\Configurations\" />
+  </ItemGroup>
+
 </Project>

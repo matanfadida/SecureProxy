@@ -71,7 +71,9 @@ namespace SecureProxy.Application.Services
                 return ProxyResult.Error(413, ProxyErrorCodes.RequestTooLarge);
             }
 
-            //9.Forward → TODO(next session)
+            var url = BuildUrl(operationDb, request.Json);
+
+            var upstreamRequest = new UpstreamRequest(operationDb.HttpMethod, url, plaintext, operationDb.Destination.TimeoutSeconds);
 
             return ProxyResult.Error(501, "not_implemented");
         }
@@ -143,6 +145,26 @@ namespace SecureProxy.Application.Services
             }
 
             return true;
+        }
+
+        private Uri BuildUrl(Operation operation, Dictionary<string, string> json)
+        {
+            var path = operation.PathTemplate;
+            if (path.Contains("{urlId}"))
+            {
+                path = path.Replace("{urlId}", Uri.EscapeDataString(json["urlId"]));
+            }
+
+            var queryParts = operation.Parameters
+                .Where(p => p.Location == Domain.Enums.ParameterLocation.Query && json.ContainsKey(p.Name))
+                .Select(p => $"{Uri.EscapeDataString(p.Name)}={Uri.EscapeDataString(json[p.Name])}");
+
+            var query = string.Join("&", queryParts);
+            var relative = path.TrimStart('/') + (query.Length > 0 ? "?" + query : "");
+
+            // BaseUrl gets a trailing slash so a base path (e.g. /api) is kept, not replaced.
+            var baseUri = new Uri(operation.Destination.BaseUrl.TrimEnd('/') + "/");
+            return new Uri(baseUri, relative);
         }
     }
 }

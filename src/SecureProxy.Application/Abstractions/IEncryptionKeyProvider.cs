@@ -8,6 +8,6 @@ namespace SecureProxy.Application.Abstractions
 {
     public interface IEncryptionKeyProvider
     {
-        public byte[] GetBytesKey(string profileName);
+        public byte[] GetBytesKey(string keyReference);
     }
 }

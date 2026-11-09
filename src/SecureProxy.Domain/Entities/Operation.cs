@@ -8,7 +8,7 @@ namespace SecureProxy.Domain.Entities
     {
         public int Id { get; set; }
 
-        public string OperationKey { get; set; } = string.Empty; 
+        public string Key { get; set; } = string.Empty; 
 
         public int DestinationId { get; set; }
 

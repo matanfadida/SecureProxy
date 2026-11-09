@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 
 namespace SecureProxy.Infrastructure.Encryption
 {
-    public class PayloadDecryptor
+    public class PayloadDecryptor : IPayloadDecryptor
     {
         private readonly IEncryptionKeyProvider _encryptionKeyProvider;
 
@@ -17,7 +17,7 @@ namespace SecureProxy.Infrastructure.Encryption
             _encryptionKeyProvider = encryptionKeyProvider;
         }
 
-        public bool TryDecrypt(string profileName, string base64Payload, out byte[]? plaintext)
+        public bool TryDecrypt(string keyReference, string base64Payload, out byte[]? plaintext)
         {
             try
             {
@@ -34,7 +34,7 @@ namespace SecureProxy.Infrastructure.Encryption
                     return false;
                 }
 
-                var key = _encryptionKeyProvider.GetBytesKey(profileName);
+                var key = _encryptionKeyProvider.GetBytesKey(keyReference);
                 if(key.Length != 32)
                 {
                     plaintext = null;

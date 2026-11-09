@@ -1,3 +1,4 @@
+using SecureProxy.Application.Services;
 using SecureProxy.Infrastructure;
 using SecureProxy.Infrastructure.Persistence;
 
@@ -10,6 +11,9 @@ builder.Services.AddInfrastructure(builder.Configuration);
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+builder.Services.AddTransient<ProxyService>();
+
 
 var app = builder.Build();
 

@@ -1,7 +1,10 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using SecureProxy.Application.Abstractions;
+using SecureProxy.Infrastructure.Encryption;
 using SecureProxy.Infrastructure.Persistence;
+using SecureProxy.Infrastructure.Persistence.Repositories;
 
 namespace SecureProxy.Infrastructure;
 
@@ -23,6 +26,9 @@ public static class DependencyInjection
 
             options.UseSqlServer(connectionString);
         });
+
+        services.AddScoped<IOperationRepository, OperationRepository>();
+        services.AddScoped<IPayloadDecryptor, PayloadDecryptor>();
 
         return services;
     }

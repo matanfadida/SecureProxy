@@ -1,12 +1,14 @@
-﻿using Azure.Core;
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using SecureProxy.Application.Proxy;
 using SecureProxy.Application.Services;
+using System.Security.Cryptography;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace SecureProxy.Api.Controller
 {
-    [Route("/api")]
+    [ApiController]
+    [Route("api/proxy")]
     public class ProxyController : ControllerBase
     {
         private readonly ProxyService _proxyService;
@@ -16,11 +18,22 @@ namespace SecureProxy.Api.Controller
             _proxyService = proxyService;
         }
 
-        [Route("/proxy/execute")]
-        [HttpPost]
-        public async Task<ProxyResult> Index(ProxyRequest request, CancellationToken ct)
+        [HttpPost("execute")]
+        [RequestSizeLimit(1_048_576)]
+        public async Task<IActionResult> Execute(ProxyRequest request, CancellationToken ct)
         {
-            return await _proxyService.ExecuteAsync(request, ct);
+            var result = await _proxyService.ExecuteAsync(request, ct);
+
+            if (!string.IsNullOrEmpty(result.ErrorCode))
+            {
+                Response.Headers["X-Proxy-Source"] = "proxy";
+                return StatusCode(result.StatusCode, new { error = result.ErrorCode, correlationId = HttpContext.TraceIdentifier });
+            }
+            Response.Headers["X-Proxy-Source"] = "upstream";
+            Response.StatusCode = result.StatusCode;
+            Response.ContentType = result.ContentType ?? "application/octet-stream";
+            await Response.Body.WriteAsync(result.Body, ct);
+            return new EmptyResult();
         }
     }
 }

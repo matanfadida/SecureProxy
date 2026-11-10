@@ -7,7 +7,7 @@ namespace SecureProxy.Tests.Encryption
     {
         public byte[] _fakeKey = RandomNumberGenerator.GetBytes(32); 
 
-        public byte[] GetBytesKey(string profileName)
+        public byte[] GetBytesKey(string keyReference)
         {
             return _fakeKey;
         }

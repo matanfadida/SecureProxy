@@ -17,9 +17,9 @@ namespace SecureProxy.Tests.Encryption
             _encryptionKeyProvider = encryptionKeyProvider;
         }
 
-        public string Encrypt(string profileName, byte[] plaintext)
+        public string Encrypt(string keyReference, byte[] plaintext)
         {
-            var key = _encryptionKeyProvider.GetBytesKey(profileName);
+            var key = _encryptionKeyProvider.GetBytesKey(keyReference);
             if (key.Length != 32)
             {
                 throw new InvalidOperationException("Key length must be 32 bytes for AES-256-GCM.");

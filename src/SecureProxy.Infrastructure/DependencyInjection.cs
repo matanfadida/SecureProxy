@@ -31,6 +31,7 @@ public static class DependencyInjection
 
         services.AddScoped<IOperationRepository, OperationRepository>();
         services.AddScoped<IPayloadDecryptor, PayloadDecryptor>();
+        services.AddSingleton<IEncryptionKeyProvider, ConfigurationKeyProvider>();
         services.AddHttpClient<IUpstreamForwarder, HttpUpstreamForwarder>(client => client.Timeout = Timeout.InfiniteTimeSpan);
         return services;
     }

@@ -14,11 +14,13 @@ namespace SecureProxy.Application.Services
     {
         private readonly IPayloadDecryptor _payloadDecryptor;
         private readonly IOperationRepository _operationRepository;
+        private readonly IUpstreamForwarder _forwarder;
 
-        public ProxyService(IPayloadDecryptor payloadDecryptor, IOperationRepository operationRepository)
+        public ProxyService(IPayloadDecryptor payloadDecryptor, IOperationRepository operationRepository, IUpstreamForwarder forwarder)
         {
             _operationRepository = operationRepository;
             _payloadDecryptor = payloadDecryptor;
+            _forwarder = forwarder;
         }
 
         public async Task<ProxyResult> ExecuteAsync(ProxyRequest request, CancellationToken cancellationToken)
@@ -75,7 +77,14 @@ namespace SecureProxy.Application.Services
 
             var upstreamRequest = new UpstreamRequest(operationDb.HttpMethod, url, plaintext, operationDb.Destination.TimeoutSeconds);
 
-            return ProxyResult.Error(501, "not_implemented");
+            var result = await _forwarder.SendAsync(upstreamRequest, cancellationToken);
+
+            return result.Outcome switch
+            {
+                UpstreamOutcome.TimedOut => ProxyResult.Error(504, ProxyErrorCodes.UpstreamTimeout),
+                UpstreamOutcome.ConnectionFailed => ProxyResult.Error(502, ProxyErrorCodes.UpstreamUnavailable),
+                _ => ProxyResult.Upstream(result.StatusCode, result.Body, result.ContentType)
+            };
         }
 
         private bool ValidateParameters(Operation operation, Dictionary<string, string> json)

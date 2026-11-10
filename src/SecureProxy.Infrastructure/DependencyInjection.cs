@@ -1,8 +1,10 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Http;
 using SecureProxy.Application.Abstractions;
 using SecureProxy.Infrastructure.Encryption;
+using SecureProxy.Infrastructure.Http;
 using SecureProxy.Infrastructure.Persistence;
 using SecureProxy.Infrastructure.Persistence.Repositories;
 
@@ -29,7 +31,7 @@ public static class DependencyInjection
 
         services.AddScoped<IOperationRepository, OperationRepository>();
         services.AddScoped<IPayloadDecryptor, PayloadDecryptor>();
-
+        services.AddHttpClient<IUpstreamForwarder, HttpUpstreamForwarder>(client => client.Timeout = Timeout.InfiniteTimeSpan);
         return services;
     }
 }

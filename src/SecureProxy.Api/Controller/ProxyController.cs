@@ -22,12 +22,13 @@ namespace SecureProxy.Api.Controller
         [RequestSizeLimit(1_048_576)]
         public async Task<IActionResult> Execute(ProxyRequest request, CancellationToken ct)
         {
-            var result = await _proxyService.ExecuteAsync(request, ct);
+            var traceIdentifier = HttpContext.TraceIdentifier;
+            var result = await _proxyService.ExecuteAsync(request, traceIdentifier, ct);
 
             if (!string.IsNullOrEmpty(result.ErrorCode))
             {
                 Response.Headers["X-Proxy-Source"] = "proxy";
-                return StatusCode(result.StatusCode, new { error = result.ErrorCode, correlationId = HttpContext.TraceIdentifier });
+                return StatusCode(result.StatusCode, new { error = result.ErrorCode, correlationId = traceIdentifier });
             }
             Response.Headers["X-Proxy-Source"] = "upstream";
             Response.StatusCode = result.StatusCode;

@@ -1,11 +1,14 @@
 ﻿using SecureProxy.Application.Abstractions;
 using SecureProxy.Application.Proxy;
 using SecureProxy.Domain.Entities;
+using SecureProxy.Domain.Enums;
+using System.Diagnostics;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace SecureProxy.Application.Services
@@ -15,76 +18,52 @@ namespace SecureProxy.Application.Services
         private readonly IPayloadDecryptor _payloadDecryptor;
         private readonly IOperationRepository _operationRepository;
         private readonly IUpstreamForwarder _forwarder;
+        private readonly IRequestAuditor _auditor;
 
-        public ProxyService(IPayloadDecryptor payloadDecryptor, IOperationRepository operationRepository, IUpstreamForwarder forwarder)
+        public ProxyService(IPayloadDecryptor payloadDecryptor, IOperationRepository operationRepository, IUpstreamForwarder forwarder, IRequestAuditor auditor)
         {
             _operationRepository = operationRepository;
             _payloadDecryptor = payloadDecryptor;
             _forwarder = forwarder;
+            _auditor = auditor;
         }
 
-        public async Task<ProxyResult> ExecuteAsync(ProxyRequest request, CancellationToken cancellationToken)
+        public async Task<ProxyResult> ExecuteAsync(ProxyRequest request, string correlationId, CancellationToken ct)
         {
-            if (string.IsNullOrEmpty(request.ClientId))
+            var log = new RequestLog
             {
-                return ProxyResult.Error(400, ProxyErrorCodes.InvalidRequest);
-            }
-
-            var operationDb = await _operationRepository.GetByOperationKeyAsync(request.ClientId, cancellationToken);
-
-            if (operationDb == null)
-            {
-                return ProxyResult.Error(404, ProxyErrorCodes.OperationNotFound);
-            }
-
-            if (!operationDb.IsActive || !operationDb.Destination.IsActive)
-            {
-                return ProxyResult.Error(404, ProxyErrorCodes.OperationNotFound);
-            }
-
-            if (!ValidateParameters(operationDb, request.Json))
-                return ProxyResult.Error(400, ProxyErrorCodes.InvalidParameters);
-
-            byte[]? plaintext = null;
-
-            if (operationDb.RequiresEncryption)
-            {
-                if (operationDb.EncryptionProfile == null)
-                {
-                    throw new InvalidOperationException($"Operation {operationDb.Id} requires encryption but has no encryption profile.");
-                }
-
-                if (string.IsNullOrEmpty(request.EncryptedPayload))
-                {
-                    return ProxyResult.Error(400, ProxyErrorCodes.InvalidEncryptedPayload);
-                }
-
-                if (!_payloadDecryptor.TryDecrypt(operationDb.EncryptionProfile.KeyReference, request.EncryptedPayload, out plaintext))
-                    return ProxyResult.Error(400, ProxyErrorCodes.InvalidEncryptedPayload);
-            }
-            else if (!string.IsNullOrEmpty(request.EncryptedPayload))
-            {
-                return ProxyResult.Error(400, ProxyErrorCodes.InvalidEncryptedPayload);
-            }
-
-
-            if (plaintext != null && plaintext.Length > operationDb.MaxRequestSizeBytes)
-            {
-                return ProxyResult.Error(413, ProxyErrorCodes.RequestTooLarge);
-            }
-
-            var url = BuildUrl(operationDb, request.Json);
-
-            var upstreamRequest = new UpstreamRequest(operationDb.HttpMethod, url, plaintext, operationDb.Destination.TimeoutSeconds);
-
-            var result = await _forwarder.SendAsync(upstreamRequest, cancellationToken);
-
-            return result.Outcome switch
-            {
-                UpstreamOutcome.TimedOut => ProxyResult.Error(504, ProxyErrorCodes.UpstreamTimeout),
-                UpstreamOutcome.ConnectionFailed => ProxyResult.Error(502, ProxyErrorCodes.UpstreamUnavailable),
-                _ => ProxyResult.Upstream(result.StatusCode, result.Body, result.ContentType)
+                CorrelationId = correlationId,
+                OperationKey = request.ClientId,
+                StartedAt = DateTime.UtcNow
             };
+            var stopwatch = Stopwatch.StartNew();
+
+            try
+            {
+                var result = await ProcessAsync(request, log, ct);
+                log.ProxyStatusCode = result.StatusCode;
+                return result;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // The caller went away. 499 = "client closed request"; it is only recorded, never sent.
+                log.Outcome = RequestOutcome.Cancelled;
+                log.ProxyStatusCode = 499;
+                throw;
+            }
+            catch
+            {
+                // Unexpected error (e.g. broken key configuration). The exception handler returns 500.
+                log.Outcome = RequestOutcome.Failed;
+                log.ProxyStatusCode = 500;
+                throw;
+            }
+            finally
+            {
+                log.CompletedAt = DateTime.UtcNow;
+                log.DurationMs = (int)stopwatch.ElapsedMilliseconds;
+                await _auditor.WriteAsync(log);
+            }
         }
 
         private bool ValidateParameters(Operation operation, Dictionary<string, string> json)
@@ -174,6 +153,99 @@ namespace SecureProxy.Application.Services
             // BaseUrl gets a trailing slash so a base path (e.g. /api) is kept, not replaced.
             var baseUri = new Uri(operation.Destination.BaseUrl.TrimEnd('/') + "/");
             return new Uri(baseUri, relative);
+        }
+
+        private async Task<ProxyResult> ProcessAsync(ProxyRequest request, RequestLog log, CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrEmpty(request.ClientId))
+            {
+                return Reject(log, 400, ProxyErrorCodes.InvalidRequest, "missing_client_id");
+            }
+
+            var operationDb = await _operationRepository.GetByOperationKeyAsync(request.ClientId, cancellationToken);
+
+            if (operationDb == null)
+            {
+                return Reject(log, 404, ProxyErrorCodes.OperationNotFound, "unknown_operation");
+            }
+
+            log.DestinationId = operationDb.DestinationId;
+
+            // Same public answer as an unknown operation (no enumeration), different internal reason.
+            if (!operationDb.IsActive)
+            {
+                return Reject(log, 404, ProxyErrorCodes.OperationNotFound, "operation_disabled");
+            }
+
+            if (!operationDb.Destination.IsActive)
+            {
+                return Reject(log, 404, ProxyErrorCodes.OperationNotFound, "destination_disabled");
+            }
+
+            if (!ValidateParameters(operationDb, request.Json))
+                return Reject(log, 400, ProxyErrorCodes.InvalidParameters, "invalid_parameters");
+
+            byte[]? plaintext = null;
+
+            if (operationDb.RequiresEncryption)
+            {
+                if (operationDb.EncryptionProfile == null)
+                {
+                    throw new InvalidOperationException($"Operation {operationDb.Id} requires encryption but has no encryption profile.");
+                }
+
+                if (string.IsNullOrEmpty(request.EncryptedPayload))
+                {
+                    return Reject(log, 400, ProxyErrorCodes.InvalidEncryptedPayload, "missing_payload");
+                }
+
+                if (!_payloadDecryptor.TryDecrypt(operationDb.EncryptionProfile.KeyReference, request.EncryptedPayload, out plaintext))
+                    return Reject(log, 400, ProxyErrorCodes.InvalidEncryptedPayload, "decryption_failed");
+            }
+            else if (!string.IsNullOrEmpty(request.EncryptedPayload))
+            {
+                return Reject(log, 400, ProxyErrorCodes.InvalidEncryptedPayload, "unexpected_payload");
+            }
+
+            if (plaintext != null && plaintext.Length > operationDb.MaxRequestSizeBytes)
+            {
+                return Reject(log, 413, ProxyErrorCodes.RequestTooLarge, "request_too_large");
+            }
+
+            var url = BuildUrl(operationDb, request.Json);
+
+            var upstreamRequest = new UpstreamRequest(operationDb.HttpMethod, url, plaintext, operationDb.Destination.TimeoutSeconds);
+
+            // From here on the request has left the proxy.
+            log.Forwarded = true;
+            var result = await _forwarder.SendAsync(upstreamRequest, cancellationToken);
+
+            switch (result.Outcome)
+            {
+                case UpstreamOutcome.TimedOut:
+                    log.Outcome = RequestOutcome.UpstreamTimeout;
+                    log.Reason = "upstream_timeout";
+                    return ProxyResult.Error(504, ProxyErrorCodes.UpstreamTimeout);
+
+                case UpstreamOutcome.ConnectionFailed:
+                    log.Outcome = RequestOutcome.UpstreamUnavailable;
+                    log.Reason = "upstream_connection_failed";
+                    return ProxyResult.Error(502, ProxyErrorCodes.UpstreamUnavailable);
+
+                default:
+                    log.Outcome = RequestOutcome.Forwarded;
+                    log.UpstreamStatusCode = result.StatusCode;
+                    return ProxyResult.Upstream(result.StatusCode, result.Body, result.ContentType);
+            }
+        }
+
+        // Rejection before forwarding: records the internal reason for the audit,
+        // returns only the public error code to the caller.
+        private static ProxyResult Reject(RequestLog log, int statusCode, string errorCode, string reason)
+        {
+            log.Outcome = RequestOutcome.Rejected;
+            log.Reason = reason;
+            return ProxyResult.Error(statusCode, errorCode);
         }
     }
 }

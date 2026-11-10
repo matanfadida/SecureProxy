@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Http;
@@ -31,6 +31,7 @@ public static class DependencyInjection
 
         services.AddScoped<IOperationRepository, OperationRepository>();
         services.AddScoped<IPayloadDecryptor, PayloadDecryptor>();
+        services.AddScoped<IRequestAuditor, RequestAuditor>();
         services.AddSingleton<IEncryptionKeyProvider, ConfigurationKeyProvider>();
         services.AddHttpClient<IUpstreamForwarder, HttpUpstreamForwarder>(client => client.Timeout = Timeout.InfiniteTimeSpan);
         return services;

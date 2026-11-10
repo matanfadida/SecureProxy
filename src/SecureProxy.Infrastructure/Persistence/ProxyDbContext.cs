@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using SecureProxy.Domain.Common;
 using SecureProxy.Domain.Entities;
 
@@ -10,6 +10,7 @@ public class ProxyDbContext(DbContextOptions<ProxyDbContext> options) : DbContex
     public DbSet<EncryptionProfile> EncryptionProfiles => Set<EncryptionProfile>();
     public DbSet<Operation> Operations => Set<Operation>();
     public DbSet<ParameterRule> ParameterRules => Set<ParameterRule>();
+    public DbSet<RequestLog> RequestLogs => Set<RequestLog>();
 
     public override int SaveChanges()
     {

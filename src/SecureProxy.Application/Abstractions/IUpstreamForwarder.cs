@@ -10,13 +10,15 @@ public record UpstreamRequest(
     string HttpMethod,
     Uri Url,
     byte[]? Body,
+    Dictionary<string, string> AllowHeaders,
     int TimeoutSeconds);
 
 public enum UpstreamOutcome
 {
     Responded,
     TimedOut,
-    ConnectionFailed
+    ConnectionFailed,
+    ResponseTooLarge
 }
 
 public record UpstreamResult(

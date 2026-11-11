@@ -19,7 +19,10 @@ namespace SecureProxy.Tests.UnitTest
         private readonly RecordingForwarder _forwarder;
         private readonly FakeAuditor _auditor;
         private readonly FakeKeyProvider _keyProvider;
+        private readonly ProxySettings _settings;
         private readonly ProxyService _service;
+
+        private static Dictionary<string, string> NoHeaders => new(StringComparer.OrdinalIgnoreCase);
 
         public ProxyServiceTests()
         {
@@ -27,7 +30,8 @@ namespace SecureProxy.Tests.UnitTest
             _forwarder = new RecordingForwarder();
             _auditor = new FakeAuditor();
             _keyProvider = new FakeKeyProvider();
-            _service = new ProxyService(new PayloadDecryptor(_keyProvider), _repository, _forwarder, _auditor);
+            _settings = new ProxySettings { AllowedHeaders = new List<string> { "Idempotency-Key", "Authorization" } };
+            _service = new ProxyService(new PayloadDecryptor(_keyProvider), _repository, _forwarder, _auditor, _settings);
         }
 
         // Test 1: a valid operation is forwarded.
@@ -41,7 +45,7 @@ namespace SecureProxy.Tests.UnitTest
                 Json = { ["urlId"] = "1" }
             };
 
-            var result = await _service.ExecuteAsync(request, "test-correlation", CancellationToken.None);
+            var result = await _service.ExecuteAsync(request, "test-correlation", NoHeaders, CancellationToken.None);
 
             Assert.Equal(200, result.StatusCode);
             Assert.True(result.FromUpstream);
@@ -62,7 +66,7 @@ namespace SecureProxy.Tests.UnitTest
                 Json = { ["urlId"] = "1" }
             };
 
-            var result = await _service.ExecuteAsync(request, "test-correlation", CancellationToken.None);
+            var result = await _service.ExecuteAsync(request, "test-correlation", NoHeaders, CancellationToken.None);
 
             Assert.Equal(404, result.StatusCode);
             Assert.Equal(ProxyErrorCodes.OperationNotFound, result.ErrorCode);
@@ -83,7 +87,7 @@ namespace SecureProxy.Tests.UnitTest
                 Json = { ["urlId"] = "1" }
             };
 
-            var result = await _service.ExecuteAsync(request, "test-correlation", CancellationToken.None);
+            var result = await _service.ExecuteAsync(request, "test-correlation", NoHeaders, CancellationToken.None);
 
             Assert.Equal(404, result.StatusCode);
             Assert.Equal(ProxyErrorCodes.OperationNotFound, result.ErrorCode);
@@ -104,7 +108,7 @@ namespace SecureProxy.Tests.UnitTest
                 Json = { ["urlId"] = "1" }
             };
 
-            var result = await _service.ExecuteAsync(request, "test-correlation", CancellationToken.None);
+            var result = await _service.ExecuteAsync(request, "test-correlation", NoHeaders, CancellationToken.None);
 
             Assert.Equal(404, result.StatusCode);
             Assert.Equal(ProxyErrorCodes.OperationNotFound, result.ErrorCode);
@@ -126,7 +130,7 @@ namespace SecureProxy.Tests.UnitTest
                 Json = { ["urlId"] = "1", ["baseUrl"] = "https://google.co.il" }
             };
 
-            var result = await _service.ExecuteAsync(request, "test-correlation", CancellationToken.None);
+            var result = await _service.ExecuteAsync(request, "test-correlation", NoHeaders, CancellationToken.None);
 
             Assert.Equal(200, result.StatusCode);
             Assert.True(result.FromUpstream);
@@ -151,7 +155,7 @@ namespace SecureProxy.Tests.UnitTest
                 Json = { ["urlId"] = "1", ["method"] = "POST" }
             };
 
-            var result = await _service.ExecuteAsync(request, "test-correlation", CancellationToken.None);
+            var result = await _service.ExecuteAsync(request, "test-correlation", NoHeaders, CancellationToken.None);
 
             Assert.Equal(200, result.StatusCode);
             Assert.True(result.FromUpstream);
@@ -173,7 +177,7 @@ namespace SecureProxy.Tests.UnitTest
                 Json = { }
             };
 
-            var result = await _service.ExecuteAsync(request, "test-correlation", CancellationToken.None);
+            var result = await _service.ExecuteAsync(request, "test-correlation", NoHeaders, CancellationToken.None);
 
             Assert.Equal(400, result.StatusCode);
             Assert.Equal(ProxyErrorCodes.InvalidParameters, result.ErrorCode);
@@ -193,7 +197,7 @@ namespace SecureProxy.Tests.UnitTest
                 Json = { ["urlId"] = "1", ["notFamiliar"] = "x" }
             };
 
-            var result = await _service.ExecuteAsync(request, "test-correlation", CancellationToken.None);
+            var result = await _service.ExecuteAsync(request, "test-correlation", NoHeaders, CancellationToken.None);
 
             Assert.Equal(400, result.StatusCode);
             Assert.Equal(ProxyErrorCodes.InvalidParameters, result.ErrorCode);
@@ -215,7 +219,7 @@ namespace SecureProxy.Tests.UnitTest
                 Json = { ["urlId"] = "1", ["notFamiliar"] = "x" }
             };
 
-            var result = await _service.ExecuteAsync(request, "test-correlation", CancellationToken.None);
+            var result = await _service.ExecuteAsync(request, "test-correlation", NoHeaders, CancellationToken.None);
 
             Assert.Equal(200, result.StatusCode);
             var sent = Assert.Single(_forwarder.ReceivedRequests);
@@ -246,13 +250,45 @@ namespace SecureProxy.Tests.UnitTest
                 Json = { ["urlId"] = urlId }
             };
 
-            var result = await _service.ExecuteAsync(request, "test-correlation", CancellationToken.None);
+            var result = await _service.ExecuteAsync(request, "test-correlation", NoHeaders, CancellationToken.None);
 
             Assert.Equal(400, result.StatusCode);
             Assert.Equal(ProxyErrorCodes.InvalidParameters, result.ErrorCode);
             Assert.Empty(_forwarder.ReceivedRequests);
         }
-        // Test 10: .
+
+        // Test 10: only allowlisted headers reach the destination.
+        [Fact]
+        public async Task ExecuteAsync_DisallowedHeaders_AreNotForwarded()
+        {
+            var operation = TestOperations.CustomerGet();
+            _repository.Add(operation);
+
+            var request = new ProxyRequest
+            {
+                ClientId = "customer.get",
+                Json = { ["urlId"] = "1" }
+            };
+
+            // Same kind of dictionary the controller builds: header names ignore case.
+            // "idempotency-key" in lower case proves the match ignores case too.
+            var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "idempotency-key", "abc-123" },
+                { "Authorization", "Bearer secret-token" },
+                { "Cookie", "session=xyz" }
+            };
+
+            var result = await _service.ExecuteAsync(request, "test-correlation", headers, CancellationToken.None);
+
+            Assert.Equal(200, result.StatusCode);
+            var sent = Assert.Single(_forwarder.ReceivedRequests);
+            var forwardedHeader = Assert.Single(sent.AllowHeaders);
+            Assert.Equal("Idempotency-Key", forwardedHeader.Key, ignoreCase: true);
+            Assert.Equal("abc-123", forwardedHeader.Value);
+            Assert.False(sent.AllowHeaders.ContainsKey("Authorization"));
+            Assert.False(sent.AllowHeaders.ContainsKey("Cookie"));
+        }
 
         // Test 11: an invalid AES-GCM tag is rejected, and nothing reaches the destination.
         [Fact]
@@ -273,7 +309,7 @@ namespace SecureProxy.Tests.UnitTest
                 EncryptedPayload = tamperedPayload
             };
 
-            var result = await _service.ExecuteAsync(request, "test-correlation", CancellationToken.None);
+            var result = await _service.ExecuteAsync(request, "test-correlation", NoHeaders, CancellationToken.None);
 
             Assert.Equal(400, result.StatusCode);
             Assert.Equal(ProxyErrorCodes.InvalidEncryptedPayload, result.ErrorCode);
@@ -297,7 +333,7 @@ namespace SecureProxy.Tests.UnitTest
                 EncryptedPayload = encryptedPayload
             };
 
-            var result = await _service.ExecuteAsync(request, "test-correlation", CancellationToken.None);
+            var result = await _service.ExecuteAsync(request, "test-correlation", NoHeaders, CancellationToken.None);
 
             Assert.Equal(400, result.StatusCode);
             Assert.Equal(ProxyErrorCodes.InvalidEncryptedPayload, result.ErrorCode);
@@ -321,7 +357,7 @@ namespace SecureProxy.Tests.UnitTest
                 EncryptedPayload = payloadWithOtherKey
             };
 
-            var result = await _service.ExecuteAsync(request, "test-correlation", CancellationToken.None);
+            var result = await _service.ExecuteAsync(request, "test-correlation", NoHeaders, CancellationToken.None);
 
             Assert.Equal(400, result.StatusCode);
             Assert.Equal(ProxyErrorCodes.InvalidEncryptedPayload, result.ErrorCode);
@@ -344,7 +380,7 @@ namespace SecureProxy.Tests.UnitTest
                 Json = { ["urlId"] = "1" }
             };
 
-            var result = await _service.ExecuteAsync(request, "test-correlation", CancellationToken.None);
+            var result = await _service.ExecuteAsync(request, "test-correlation", NoHeaders, CancellationToken.None);
 
             Assert.Equal(504, result.StatusCode);
             Assert.Equal(ProxyErrorCodes.UpstreamTimeout, result.ErrorCode);
@@ -368,7 +404,7 @@ namespace SecureProxy.Tests.UnitTest
                 Json = { ["urlId"] = "1" }
             };
 
-            var result = await _service.ExecuteAsync(request, "test-correlation", CancellationToken.None);
+            var result = await _service.ExecuteAsync(request, "test-correlation", NoHeaders, CancellationToken.None);
 
             Assert.Equal(500, result.StatusCode);       // the destination's status, preserved
             Assert.True(result.FromUpstream);           // -> X-Proxy-Source: upstream
@@ -391,7 +427,7 @@ namespace SecureProxy.Tests.UnitTest
                 Json = { ["urlId"] = "1" }
             };
 
-            var result = await _service.ExecuteAsync(request, "test-correlation", CancellationToken.None);
+            var result = await _service.ExecuteAsync(request, "test-correlation", NoHeaders, CancellationToken.None);
 
             Assert.Equal(502, result.StatusCode);
             Assert.Equal(ProxyErrorCodes.UpstreamUnavailable, result.ErrorCode);
@@ -414,7 +450,7 @@ namespace SecureProxy.Tests.UnitTest
                 Json = { ["urlId"] = "1" }
             };
 
-            await _service.ExecuteAsync(request, "test-correlation", CancellationToken.None);
+            await _service.ExecuteAsync(request, "test-correlation", NoHeaders, CancellationToken.None);
 
             var entry = Assert.Single(_auditor.Entries);
             Assert.Equal("test-correlation", entry.CorrelationId);
@@ -437,7 +473,7 @@ namespace SecureProxy.Tests.UnitTest
                 Json = { ["urlId"] = "1" }
             };
 
-            var result = await _service.ExecuteAsync(request, "test-correlation", CancellationToken.None);
+            var result = await _service.ExecuteAsync(request, "test-correlation", NoHeaders, CancellationToken.None);
 
             var entry = Assert.Single(_auditor.Entries);
             Assert.Equal(RequestOutcome.Rejected, entry.Outcome);
@@ -463,7 +499,7 @@ namespace SecureProxy.Tests.UnitTest
                 Json = { ["urlId"] = "1" }
             };
 
-            var result = await _service.ExecuteAsync(request, "test-correlation", CancellationToken.None);
+            var result = await _service.ExecuteAsync(request, "test-correlation", NoHeaders, CancellationToken.None);
 
             Assert.Equal(ProxyErrorCodes.OperationNotFound, result.ErrorCode);
             var entry = Assert.Single(_auditor.Entries);

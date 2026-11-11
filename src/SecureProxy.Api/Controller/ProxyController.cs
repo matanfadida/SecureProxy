@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Primitives;
 using SecureProxy.Application.Proxy;
 using SecureProxy.Application.Services;
 using System.Security.Cryptography;
@@ -23,7 +24,8 @@ namespace SecureProxy.Api.Controller
         public async Task<IActionResult> Execute(ProxyRequest request, CancellationToken ct)
         {
             var traceIdentifier = HttpContext.TraceIdentifier;
-            var result = await _proxyService.ExecuteAsync(request, traceIdentifier, ct);
+            Dictionary<string, string> incomingHeaders = Request.Headers.ToDictionary(x => x.Key, x => x.Value.ToString(), StringComparer.OrdinalIgnoreCase);
+            var result = await _proxyService.ExecuteAsync(request, traceIdentifier, incomingHeaders, ct);
 
             if (!string.IsNullOrEmpty(result.ErrorCode))
             {

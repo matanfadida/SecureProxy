@@ -2,9 +2,9 @@
 using SecureProxy.Application.Proxy;
 using SecureProxy.Domain.Entities;
 using SecureProxy.Domain.Enums;
-using System.Diagnostics;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -19,16 +19,19 @@ namespace SecureProxy.Application.Services
         private readonly IOperationRepository _operationRepository;
         private readonly IUpstreamForwarder _forwarder;
         private readonly IRequestAuditor _auditor;
+        private readonly ProxySettings _proxySettings;
 
-        public ProxyService(IPayloadDecryptor payloadDecryptor, IOperationRepository operationRepository, IUpstreamForwarder forwarder, IRequestAuditor auditor)
+        public ProxyService(IPayloadDecryptor payloadDecryptor,
+            IOperationRepository operationRepository, IUpstreamForwarder forwarder, IRequestAuditor auditor, ProxySettings proxySettings)
         {
             _operationRepository = operationRepository;
             _payloadDecryptor = payloadDecryptor;
             _forwarder = forwarder;
             _auditor = auditor;
+            _proxySettings = proxySettings;
         }
 
-        public async Task<ProxyResult> ExecuteAsync(ProxyRequest request, string correlationId, CancellationToken ct)
+        public async Task<ProxyResult> ExecuteAsync(ProxyRequest request, string correlationId, Dictionary<string,string> incomingHeaders, CancellationToken ct)
         {
             var log = new RequestLog
             {
@@ -40,7 +43,7 @@ namespace SecureProxy.Application.Services
 
             try
             {
-                var result = await ProcessAsync(request, log, ct);
+                var result = await ProcessAsync(request, log, incomingHeaders, ct);
                 log.ProxyStatusCode = result.StatusCode;
                 return result;
             }
@@ -155,7 +158,7 @@ namespace SecureProxy.Application.Services
             return new Uri(baseUri, relative);
         }
 
-        private async Task<ProxyResult> ProcessAsync(ProxyRequest request, RequestLog log, CancellationToken cancellationToken)
+        private async Task<ProxyResult> ProcessAsync(ProxyRequest request, RequestLog log, Dictionary<string, string> incomingHeaders, CancellationToken cancellationToken)
         {
             if (string.IsNullOrEmpty(request.ClientId))
             {
@@ -212,9 +215,11 @@ namespace SecureProxy.Application.Services
                 return Reject(log, 413, ProxyErrorCodes.RequestTooLarge, "request_too_large");
             }
 
+            var allowsHeaders = ReturnAllowsHeaders(incomingHeaders);
+
             var url = BuildUrl(operationDb, request.Json);
 
-            var upstreamRequest = new UpstreamRequest(operationDb.HttpMethod, url, plaintext, operationDb.Destination.TimeoutSeconds);
+            var upstreamRequest = new UpstreamRequest(operationDb.HttpMethod, url, plaintext, allowsHeaders, operationDb.Destination.TimeoutSeconds);
 
             // From here on the request has left the proxy.
             log.Forwarded = true;
@@ -226,6 +231,11 @@ namespace SecureProxy.Application.Services
                     log.Outcome = RequestOutcome.UpstreamTimeout;
                     log.Reason = "upstream_timeout";
                     return ProxyResult.Error(504, ProxyErrorCodes.UpstreamTimeout);
+
+                case UpstreamOutcome.ResponseTooLarge:
+                    log.Outcome = RequestOutcome.UpstreamUnavailable;
+                    log.Reason = "upstream_response_too_large";
+                    return ProxyResult.Error(502, ProxyErrorCodes.UpstreamUnavailable);
 
                 case UpstreamOutcome.ConnectionFailed:
                     log.Outcome = RequestOutcome.UpstreamUnavailable;
@@ -239,6 +249,36 @@ namespace SecureProxy.Application.Services
             }
         }
 
+        // Headers that must never reach the destination, even if someone adds them to the allowlist by mistake:
+        // the caller's credentials for the proxy, and headers that describe only this hop.
+        private static readonly HashSet<string> NeverForwardedHeaders = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "Authorization", "Cookie", "Host", "Connection", "Keep-Alive", "Transfer-Encoding",
+            "Upgrade", "Proxy-Authorization", "Proxy-Connection", "TE", "Trailer"
+        };
+
+        // Allowlist: only headers named in configuration pass. Everything else is dropped.
+        private Dictionary<string, string> ReturnAllowsHeaders(Dictionary<string, string> incomingHeaders)
+        {
+            var allowed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var name in _proxySettings.AllowedHeaders ?? new List<string>())
+            {
+                if (NeverForwardedHeaders.Contains(name))
+                {
+                    continue; // safety net
+                }
+
+                // incomingHeaders ignores case, so "idempotency-key" matches "Idempotency-Key".
+                if (incomingHeaders.TryGetValue(name, out var value))
+                {
+                    allowed[name] = value;
+                }
+            }
+
+            return allowed;
+        }
+
         // Rejection before forwarding: records the internal reason for the audit,
         // returns only the public error code to the caller.
         private static ProxyResult Reject(RequestLog log, int statusCode, string errorCode, string reason)
@@ -247,5 +287,6 @@ namespace SecureProxy.Application.Services
             log.Reason = reason;
             return ProxyResult.Error(statusCode, errorCode);
         }
+
     }
 }

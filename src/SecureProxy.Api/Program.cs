@@ -1,4 +1,5 @@
-﻿using SecureProxy.Application.Services;
+﻿using Microsoft.Extensions.Options;
+using SecureProxy.Application.Services;
 using SecureProxy.Infrastructure;
 using SecureProxy.Infrastructure.Persistence;
 
@@ -13,6 +14,9 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 builder.Services.AddScoped<ProxyService>();
+builder.Services.Configure<ProxySettings>(builder.Configuration.GetSection("Proxy"));
+// ProxyService takes ProxySettings directly, so Application does not depend on Microsoft.Extensions.Options.
+builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<ProxySettings>>().Value);
 
 
 var app = builder.Build();

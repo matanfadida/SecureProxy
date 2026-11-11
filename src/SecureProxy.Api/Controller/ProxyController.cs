@@ -38,5 +38,7 @@ namespace SecureProxy.Api.Controller
             await Response.Body.WriteAsync(result.Body, ct);
             return new EmptyResult();
         }
+
+
     }
 }
